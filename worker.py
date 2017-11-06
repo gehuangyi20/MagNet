@@ -39,6 +39,12 @@ class AEDetector:
         marks = np.mean(np.power(diff, self.p), axis=(1,2,3))
         return marks
 
+    def tf_mark(self, X):
+        import tensorflow as tf
+        diff = tf.abs(X - self.model(X))
+        marks = tf.reduce_mean(tf.pow(diff, self.p), axis=(1,2,3))
+        return marks
+    
     def print(self):
         return "AEDetector:" + self.path.split("/")[-1]
 
@@ -139,6 +145,7 @@ class Classifier:
         return "Classifier:"+self.path.split("/")[-1]
 
 
+
 class Operator:
     def __init__(self, data, classifier, det_dict, reformer):
         """
@@ -226,6 +233,14 @@ class AttackData:
     def print(self):
         return "Attack:"+self.name
 
+class Attack:
+    def __init__(self, operator):
+        def classify(X):
+            for name, detector in operator.det_dict.items():
+                marks = detector.mark(X)
+                X_prime = self.reformer.heal(X)
+                thrs = {'II': 0.014912951, 'I': 0.0041088029}
+                classify(X_prime)
 
 class Evaluator:
     def __init__(self, operator, untrusted_data, graph_dir="./graph"):
@@ -311,6 +326,7 @@ class Evaluator:
         print("\n==========================================================")
         print("Drop Rate:", drop_rate)
         thrs = self.operator.get_thrs(drop_rate)
+        print(thrs)
 
         all_pass, _ = self.operator.filter(self.operator.data.test_data, thrs)
         all_on_acc, _, _, _ = self.get_normal_acc(all_pass)
