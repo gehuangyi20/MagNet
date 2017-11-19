@@ -57,6 +57,7 @@ class IdReformer:
         """
         self.path = path
         self.heal = lambda X: X
+        self.model = lambda X: X
 
     def print(self):
         return "IdReformer:" + self.path
@@ -108,6 +109,17 @@ class DBDetector:
     def mark(self, X):
         return self.mark_jsd(X)
 
+    def tf_mark(self, X):
+        import tensorflow as tf
+
+        Xp = self.prober.model(X)
+        Xr = self.reconstructor.model(X)
+        P = tf.nn.softmax(self.classifier.model(Xp)/self.T)
+        Q = tf.nn.softmax(self.classifier.model(Xr)/self.T)
+        M = (P+Q)/2
+
+        return 0.5*(tf.reduce_sum(P*tf.log(P/M), axis=1)+tf.reduce_sum(Q*tf.log(Q/M), axis=1))
+    
     def mark_jsd(self, X):
         Xp = self.prober.heal(X)
         Xr = self.reconstructor.heal(X)
@@ -130,7 +142,12 @@ class Classifier:
         classifier_path: Path to Keras classifier file.
         """
         self.path = classifier_path
-        self.model = load_model(classifier_path)
+
+        def fn(correct, predicted):
+            import tensorflow as tf
+            return tf.nn.softmax_cross_entropy_with_logits(labels=correct,
+                                                           logits=predicted)
+        self.model = load_model(classifier_path, custom_objects={'fn': fn})
         self.softmax = Sequential()
         self.softmax.add(Lambda(lambda X: softmax(X, axis=1), input_shape=(10,)))
 

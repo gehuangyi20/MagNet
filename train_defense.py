@@ -6,34 +6,54 @@
 ## contained in the LICENCE file in this directory.
 
 from setup_mnist import MNIST
+from setup_cifar import CIFAR
 from defensive_models import DenoisingAutoEncoder as DAE
 from defensive_models import PackedAutoEncoder as PAE
 
-poolings = ["average", "max"]
+USE_MNIST = False
+if USE_MNIST:
+    shape = [28, 28, 1]
+    combination_I = [3, "average", 3]
+    combination_II = [3]
+    activation = "sigmoid"
+    reg_strength = 1e-9
+    epochs = 30
+    
+    data = MNIST()
+    
+    AE_I = DAE(shape, combination_I, v_noise=0.1, activation=activation,
+               reg_strength=reg_strength)
+    AE_I.train(data, "MNIST_I", num_epochs=epochs)
+    
+    AE_II = DAE(shape, combination_II, v_noise=0.1, activation=activation,
+                reg_strength=reg_strength)
+    AE_II.train(data, "MNIST_II", num_epochs=epochs)
+    
+    AE_I = PAE(shape, combination_I, data, v_noise=0.1, activation=activation,
+                n_pack=8)
+    AE_I.train(data, "O_PAE_MNIST_I", alpha=.2, num_epochs=epochs)
+    
+    AE_II = PAE(shape, combination_II, data, v_noise=0.1, activation=activation,
+                n_pack=8)
+    AE_II.train(data, "O_PAE_MNIST_II", alpha=.2, num_epochs=epochs)    
+else:
+    shape = [32, 32, 3]
+    combination_II = [3]
+    activation = "sigmoid"
+    reg_strength = 1e-9
+    epochs = 100
 
-shape = [28, 28, 1]
-combination_I = [3, "average", 3]
-combination_II = [3]
-activation = "sigmoid"
-reg_strength = 1e-9
-epochs = 30
+    data = CIFAR()
+    
+    AE_II = PAE(shape, combination_II, data, v_noise=0.025, activation=activation,
+                n_pack=8)
+    AE_II.train(data, "PAE_CIFAR_II", alpha=.2, num_epochs=epochs)
 
-data = MNIST()
+    AE_II = PAE(shape, combination_II, data, v_noise=0.025, activation=activation,
+                n_pack=8)
+    AE_II.train(data, "O_PAE_CIFAR_II", alpha=.2, num_epochs=epochs)    
 
-"""
-AE_I = DAE(shape, combination_I, v_noise=0.1, activation=activation,
-           reg_strength=reg_strength)
-AE_I.train(data, "MNIST_I", num_epochs=epochs)
-
-AE_II = DAE(shape, combination_II, v_noise=0.1, activation=activation,
-            reg_strength=reg_strength)
-AE_II.train(data, "MNIST_II", num_epochs=epochs)
-"""
-
-AE_I = PAE(shape, combination_I, data, v_noise=0.1, activation=activation,
-            n_pack=8)
-AE_I.train(data, "PAE_MNIST_I", alpha=.2, num_epochs=epochs)
-
-AE_II = PAE(shape, combination_II, data, v_noise=0.1, activation=activation,
-            n_pack=8)
-AE_II.train(data, "PAE_MNIST_II", alpha=.2, num_epochs=epochs)
+    AE_II = PAE(shape, combination_II, data, v_noise=0.025, activation=activation,
+                n_pack=32)
+    AE_II.train(data, "O32_PAE_CIFAR_II", alpha=.2, num_epochs=epochs)    
+    

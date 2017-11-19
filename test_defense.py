@@ -9,39 +9,78 @@ import numpy as np
 import tensorflow as tf
 import keras
 from setup_mnist import MNIST
+from setup_cifar import CIFAR
 from utils import prepare_data
-from worker import AEDetector, SimpleReformer, IdReformer, AttackData, Classifier, Operator, Evaluator, Attack
+from worker import AEDetector, SimpleReformer, IdReformer, AttackData, Classifier, Operator, Evaluator, Attack, DBDetector
 from l2_attack import CarliniL2
 import utils
 
+dataset = "CIFAR"
 
-sess = keras.backend.set_learning_phase(False)
+keras.backend.set_learning_phase(False)
+sess = keras.backend.get_session()
 
-detector_I = [AEDetector("./defensive_models/PAE_MNIST_I_"+str(i), p=2) for i in range(3)]
-detector_II = [AEDetector("./defensive_models/PAE_MNIST_II_"+str(i), p=1) for i in range(3)]
-reformer = [SimpleReformer("./defensive_models/PAE_MNIST_I_"+str(i)) for i in range(3)]
+attacking = False
+
+prefix = "O_" if attacking else ""
+
+if dataset == "MNIST":
+    detector_I = [AEDetector("./defensive_models/"+prefix+"PAE_MNIST_I_"+str(i), p=1) for i in range(8)]
+    if attacking:
+        detector_I += [AEDetector("./defensive_models/MNIST_I_"+str(i), p=1) for i in range(8)]
+else:
+    detector_I = []
+
+if dataset == "MNIST":
+    detector_II = [AEDetector("./defensive_models/"+prefix+"PAE_MNIST_II_"+str(i), p=2) for i in range(8)]
+    if attacking:
+        detector_II += [AEDetector("./defensive_models/MNIST_II_"+str(i), p=2) for i in range(8)]
+else:
+    detector_II = [AEDetector("./defensive_models/"+prefix+"PAE_CIFAR_II_"+str(i), p=1) for i in range(8)]
+
+if dataset == "MNIST":
+    reformer = [SimpleReformer("./defensive_models/"+prefix+"PAE_MNIST_I_"+str(i)) for i in range(8)]
+    if attacking:
+        reformer += [SimpleReformer("./defensive_models/MNIST_I_"+str(i)) for i in range(24)]
+else:
+    reformer = [SimpleReformer("./defensive_models/"+prefix+"PAE_CIFAR_II_"+str(i)) for i in range(8)]
 
 id_reformer = IdReformer()
-classifier = Classifier("./models/example_classifier")
+
+if dataset == "MNIST":
+    classifier = Classifier("./models/example_classifier")
+else:
+    classifier = Classifier("./models/cifar_example_classifier")
+
+if dataset == "MNIST":
+    detector_JSD = []
+else:
+    detector_JSD = [DBDetector(id_reformer, ref, classifier, T=10) for i,ref in enumerate(reformer)]
+    detector_JSD += [DBDetector(id_reformer, ref, classifier, T=40) for i,ref in enumerate(reformer)]
 
 detector_dict = dict()
 for i,det in enumerate(detector_I):
     detector_dict["I"+str(i)] = det
 for i,det in enumerate(detector_II):
     detector_dict["II"+str(i)] = det
+for i,det in enumerate(detector_JSD):
+    detector_dict["JSD"+str(i)] = det
 
-mnist = MNIST()     
-operator = Operator(mnist, classifier, detector_dict, reformer[0])
+if dataset == "MNIST":
+    data = MNIST()
+else:
+    data = CIFAR()
 
-idx = utils.load_obj("example_idx")
-_, _, Y = prepare_data(mnist, idx)
-f = "example_carlini_0.0"
-testAttack = AttackData(f, Y, "Carlini L2 0.0")
+operator = Operator(data, classifier, detector_dict, reformer[0])
 
-dr = dict([("I"+str(i),.001) for i in range(10)]+[("II"+str(i),.001) for i in range(10)])
+if dataset == "MNIST":
+    dr = dict([("I"+str(i),.001) for i in range(100)]+[("II"+str(i),.001) for i in range(100)])
+else:
+    dr = dict([("II"+str(i),.005) for i in range(100)]+[("JSD"+str(i),.01) for i in range(100)])
 
-dat = mnist.test_data[:16]
-print(dat.min(), dat.max())
+idx = [np.where(np.argmax(data.test_labels,axis=1)==i)[0][0] for i in range(10)]
+dat = np.array([data.test_data[i] for i in idx for j in range(10)])
+lab = sess.run(tf.one_hot(np.array([list(range(10))]*10).flatten(), depth=10))
 
 def show(img):
     remap = "  .*#"+"#"*100
@@ -50,56 +89,50 @@ def show(img):
     for i in range(28):
         print("".join([remap[int(round(x))] for x in img[i*28:i*28+28]]))
 
-detector0 = detector_dict['I0']
-detector1 = detector_dict['II0']
-
-thrs = operator.get_thrs(dr)
-
-def pred2(x):
-    probs = classifier.model(reformer[0].model(x))
-    
-    #prob = tf.reduce_sum([d.tf_mark(x) for d in detector_dict.values()],axis=1)
-    #print(prob)
-    #res = tf.stack([prob, 1-prob], axis=1)
-    #print(res.shape)
-    return probs
-
 class Pred2:
-    image_size = 28
+    image_size = 28 if dataset == "MNIST" else 32
     num_labels = 10
-    num_channels = 1
+    num_channels = 1 if dataset == "MNIST" else 3
+    def __init__(self, reformer):
+        self.reformer = reformer
     def predict(self, x):
-        return pred2(x)
+        return classifier.model(self.reformer.model(x))
 
-sess = keras.backend.get_session()
-#attack = cleverhans.attacks.CarliniWagnerL2(pred2, sess=sess)
-#adv = attack.generate_np(dat, y_target=np.array([[0, 1]]*len(dat)))
-attack = CarliniL2(sess, Pred2(), detector_dict, thrs, batch_size=16,
-                   binary_search_steps=5, learning_rate=1e-1,
-                   max_iterations=1000, targeted=True,
-                   initial_const=1, confidence=1,
-                   boxmin=0, boxmax=1)
+if attacking:
+    thrs = operator.get_thrs(dict((k,v*4) for k,v in dr.items()))
 
-lab = np.array([[1, 0, 0, 0, 0, 0, 0, 0, 0, 0]]*16)
-adv = attack.attack(dat, lab)
-np.save("/tmp/q.npy",adv)
-#adv = np.load("/tmp/q.npy")
-
-#class Adv:
-#    data = adv
-#    labels = np.argmax(mnist.train_labels,axis=1)[:10]
-
-for ref in reformer:
-    print(np.argmax(classifier.model.predict(ref.model.predict(adv)),axis=1))
-print(np.argmax(classifier.model.predict(adv),axis=1))
+    attack = CarliniL2(sess, [Pred2(x) for x in reformer], detector_dict, thrs, batch_size=100,
+                       binary_search_steps=4, learning_rate=1e-2,
+                       max_iterations=10000, targeted=True,
+                       initial_const=1, confidence=1,
+                       boxmin=0, boxmax=1)
     
+    adv = attack.attack(dat, lab)
+    np.save("/tmp/"+dataset+".npy",adv)
+else:
+    adv = np.load("/tmp/"+dataset+".npy")
+print('mean distortion', np.mean(np.sum((adv-dat)**2,axis=(1,2,3))**.5))
+
+for i,ref in enumerate(reformer):
+    print('reformer',i)
+    predicted = np.argmax(classifier.model.predict(ref.model.predict(adv)),axis=1)
+    print(np.mean(predicted==np.argmax(lab,axis=1)))#,predicted)
+
+predicted = np.argmax(classifier.model.predict(adv),axis=1)
+print('without reformer')
+print(np.mean(predicted==np.argmax(lab,axis=1)),predicted)
+    
+thrs = operator.get_thrs(dr)
 print(thrs)
 passes, _ = operator.filter(adv, thrs)
-print(passes)
+print('rate of passing fooling', float(len(passes))/len(dat))#, passes)
 
+exit(0)
 for e in adv:
     show(e)
-exit(0)
+
+detector0 = detector_dict['I0']
+detector1 = detector_dict['II0']
 
 print(detector0.mark(dat))
 print(detector1.mark(dat))
@@ -107,6 +140,11 @@ print(detector0.mark(adv))
 print(detector1.mark(adv))
 exit(0)
 
+
+idx = utils.load_obj("example_idx")
+_, _, Y = prepare_data(data, idx)
+f = "example_carlini_0.0"
+testAttack = AttackData(f, Y, "Carlini L2 0.0")
 
 Attack(operator)
 exit(0)
